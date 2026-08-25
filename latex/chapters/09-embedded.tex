@@ -1,0 +1,101 @@
+\section{嵌入式开发要点}
+
+本章从「上电到 main」的链路出发，讲解 STM32 裸机运行机制。
+
+\subsection{启动流程}
+
+上电复位后，CPU 从地址 \texttt{0x00000000} 取栈顶指针（SP）和复位向量
+（Reset\_Handler），之后按启动文件里的流程执行：
+
+\begin{enumerate}
+  \item \textbf{取 SP}：把向量表第一项加载到栈指针；
+  \item \textbf{跳转 Reset\_Handler}：向量表第二项即复位处理函数入口；
+  \item \textbf{拷贝 .data}：把已初始化全局变量的初值从 Flash 拷到 RAM；
+  \item \textbf{清零 .bss}：把未初始化全局变量清零；
+  \item \textbf{SystemInit()}：配置时钟（HSE/PLL，切到 168\,MHz）；
+  \item \textbf{main()}：进入你的应用代码。
+\end{enumerate}
+
+对应本工程的启动文件 \texttt{startup/startup\_stm32f40\_41xxx.s}，
+其中 \texttt{Reset\_Handler} 依次完成 3--5 步（第 6 步 \texttt{bl main}）。
+我们已在其中去掉了 newlib 相关的 \texttt{\_\_libc\_init\_array} 调用。
+
+\subsection{内存映射与链接脚本}
+
+链接脚本（\texttt{linker/STM32F407VET6.ld}）规定了各段放在哪里：
+
+\begin{lstlisting}[style=generic]
+MEMORY
+{
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 512K   # 代码 + 只读数据
+  RAM   (xrw) : ORIGIN = 0x20000000, LENGTH = 128K   # 变量 + 栈 + 堆
+}
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{.text}（代码）、\texttt{.rodata}（常量）$\to$ FLASH；
+  \item \texttt{.data}（已初始化全局变量，初值在 Flash，运行时拷到 RAM）；
+  \item \texttt{.bss}（未初始化变量，运行时清零）$\to$ RAM；
+  \item 栈和堆在 RAM 末尾，脚本里定义了 \texttt{\_Min\_Heap\_Size} /
+        \texttt{\_Min\_Stack\_Size}。
+\end{itemize}
+
+烧录 \texttt{.bin} 时从 \texttt{0x08000000} 开始写 Flash。
+
+\subsection{向量表}
+
+启动文件里的向量表是一段地址列表，顺序与 ARM 规定一致：
+
+\begin{lstlisting}[style=generic]
+  .word  _estack             ; 0：栈顶
+  .word  Reset_Handler       ; 1：复位
+  .word  NMI_Handler         ; 2：不可屏蔽中断
+  .word  HardFault_Handler   ; 3：硬错误
+  ...                        ; 之后是各外设中断
+\end{lstlisting}
+
+系统发生中断时，硬件按中断号查这张表，跳到对应处理函数。
+本工程把向量表放在 Flash 起始处（\texttt{.isr\_vector} 段）。
+
+\subsection{Cortex-M4 与 FPU}
+
+STM32F407 是 Cortex-M4F，带单精度 FPU：
+
+\begin{itemize}
+  \item 编译选项 \texttt{-mfpu=fpv4-sp-d16}：启用单精度 FPU 指令；
+  \item \texttt{-mfloat-abi=hard}：浮点参数用 FPU 寄存器传递（更快）；
+  \item 硬浮点 ABI 要求\textbf{编译和链接使用相同选项}，否则链接报
+        \texttt{float ABI mismatch} 类错误；
+  \item \texttt{SystemInit()} 里会打开 FPU（设置 CPACR 寄存器），
+        否则执行浮点指令会触发 UsageFault。
+\end{itemize}
+
+\subsection{时钟树}
+
+\texttt{Core/src/system\_stm32f4xx.c} 里的 \texttt{SetSysClock()} 负责：
+
+\begin{enumerate}
+  \item 启用 HSE（外部晶振，本板 8\,MHz）；
+  \item 配置 PLL 倍频到 168\,MHz（SYSCLK）；
+  \item 配置 AHB/APB1/APB2 分频（APB1 最高 42\,MHz，APB2 最高 84\,MHz）；
+  \item 切换系统时钟源到 PLL，并等待切换完成（\texttt{RCC\_CFGR\_SWS} 忙等）。
+\end{enumerate}
+
+外设时钟由 \texttt{RCC} 使能（例如 \texttt{RCC\_AHB1PeriphClockCmd}
+打开 GPIOD 的时钟）之后，外设寄存器才能被正常访问。
+
+\subsection{烧录与调试}
+
+\texttt{.bin}/\texttt{.hex} 生成后需要烧到芯片，常用工具：
+
+\begin{itemize}
+  \item \textbf{ST-Link + STM32CubeProgrammer}（官方图形/命令行工具）；
+  \item \textbf{OpenOCD}：
+        \texttt{openocd -f interface/stlink.cfg -f target/stm32f4x.cfg
+        -c "program build/MAKE.elf verify reset exit"}；
+  \item \textbf{st-flash}（仅 ST-Link）：
+        \texttt{st-flash write build/MAKE.bin 0x08000000}。
+\end{itemize}
+
+调试建议配合 GDB 与 OpenOCD 的 GDB server，或用 STM32CubeIDE 的调试器
+加载 \texttt{build/MAKE.elf}。

@@ -1,0 +1,291 @@
+\section{存储器、内存管理与 OTA 升级}
+
+本章从\textbf{整个地址空间}讲起，逐步落到本工程的 IAP 分区、链接脚本、
+上电流程和 OTA 升级业务。读完你会明白：为什么程序烧在
+\texttt{0x08000000}、为什么跳转标志放在 \texttt{0x08060000}、
+为什么上电后程序知道自己该做什么。
+
+\subsection{Cortex-M4 的 4GB 地址空间}
+
+Cortex-M 内核采用\textbf{统一编址}：代码、内存、外设、寄存器全部
+映射到同一个 4GB 地址空间里，CPU 访问它们的方式完全一样。整个空间
+按用途分成六大块：
+
+\begin{tabular}{lll}
+\toprule
+\textbf{地址范围} & \textbf{大小} & \textbf{用途} \\
+\midrule
+0x00000000 -- 0x1FFFFFFF & 512MB & 代码区（Flash / ROM） \\
+0x20000000 -- 0x3FFFFFFF & 512MB & SRAM（变量、栈、堆） \\
+0x40000000 -- 0x5FFFFFFF & 512MB & 片上外设（GPIO、串口、定时器等） \\
+0x60000000 -- 0x9FFFFFFF & 1GB & 外部 RAM \\
+0xA0000000 -- 0xDFFFFFFF & 1GB & 外部设备 \\
+0xE0000000 -- 0xFFFFFFFF & 512MB & 内核系统区（NVIC、SysTick、SCB 等） \\
+\bottomrule
+\end{tabular}
+
+MCU 上电后第一条指令、中断处理、外设寄存器读写，全都是在这张表里
+按地址干活。
+
+\subsection{STM32F407 的实际内存地图}
+
+把上面的通用框架填上 STM32F407 的具体资源（本工程芯片 512KB Flash、
+128KB SRAM）：
+
+\begin{tabular}{lll}
+\toprule
+\textbf{地址范围} & \textbf{大小} & \textbf{用途} \\
+\midrule
+0x00000000 -- 0x0007FFFF & 512KB & Flash 别名（\texttt{BOOT0=0} 时映射到主 Flash） \\
+0x08000000 -- 0x0807FFFF & 512KB & 主 Flash：代码 + 常量（\texttt{.text}/\texttt{.rodata}） \\
+0x1FFF0000 -- 0x1FFF77FF & 30KB & 系统存储器：出厂 Bootloader（ISP） \\
+0x1FFFC000 -- 0x1FFFC00F & 16B & 选项字节：读保护、写保护等配置 \\
+0x10000000 -- 0x1000FFFF & 64KB & CCMRAM：CPU 专用 RAM（DMA 不能访问） \\
+0x20000000 -- 0x2001FFFF & 128KB & 主 SRAM：变量、栈、堆 \\
+0x40000000 -- 0x5FFFFFFF & -- & 外设区：AHB/APB 上的全部外设寄存器 \\
+0xE000ED08 & 4B & \texttt{SCB->VTOR}：向量表偏移寄存器（跳转的关键） \\
+0xE000E010 & 4B & SysTick 定时器 \\
+\bottomrule
+\end{tabular}
+
+\textbf{BOOT0 引脚的三种启动方式}（决定 CPU 从哪取向量表）：
+
+\begin{enumerate}
+  \item \texttt{BOOT0=0}：从\textbf{主 Flash}（0x08000000）启动——正常运行；
+  \item \texttt{BOOT0=1, BOOT1=0}：从\textbf{系统存储器}（出厂 Bootloader）启动，
+        用于串口 ISP 烧录；
+  \item \texttt{BOOT0=1, BOOT1=1}：从 \textbf{SRAM} 启动，调试用。
+\end{enumerate}
+
+本工程默认 \texttt{BOOT0=0}，所以上电永远从主 Flash 的 \texttt{0x08000000}
+开始。
+
+\subsection{Flash 物理特性与扇区管理}
+
+Flash 有两个关键物理约束，所有分区设计都从这两条出发：
+
+\begin{itemize}
+  \item \textbf{只能把 1 写成 0}：已编程的位只能 1$\to$0，想变回 1
+        只能擦除；
+  \item \textbf{擦除的最小单位是扇区}：不能只擦一个字节。
+\end{itemize}
+
+STM32F407 的 512KB Flash 分 8 个扇区（S0--S7），大小不相等：
+
+\begin{tabular}{lll}
+\toprule
+\textbf{扇区} & \textbf{地址} & \textbf{大小} \\
+\midrule
+S0 & 0x08000000 & 16KB \\
+S1 & 0x08004000 & 16KB \\
+S2 & 0x08008000 & 16KB \\
+S3 & 0x0800C000 & 16KB \\
+S4 & 0x08010000 & 64KB \\
+S5 & 0x08020000 & 128KB \\
+S6 & 0x08040000 & 128KB \\
+S7 & 0x08060000 & 128KB \\
+\bottomrule
+\end{tabular}
+
+由此得出三条设计准则：\textbf{分区边界必须对齐扇区}（否则擦 A 区会误擦
+B 区）；\textbf{代码区之间要留够擦除粒度}；\textbf{需要反复改写的数据
+（如跳转标志）要独占一个扇区}。
+
+\subsection{本工程的 IAP 分区}
+
+本工程把 512KB Flash 划分如下（即方案甲：Boot + 双 App）：
+
+\begin{tabular}{llll}
+\toprule
+\textbf{区} & \textbf{扇区} & \textbf{地址} & \textbf{大小} \\
+\midrule
+Bootloader & S0 + S1 & 0x08000000 & 32KB \\
+App1 & S2 + S3 & 0x08008000 & 32KB \\
+App2 & S4 & 0x08010000 & 64KB \\
+备用 & S5 + S6 & 0x08020000 & 256KB \\
+跳转标志区 & S7 & 0x08060000 & 128KB \\
+\bottomrule
+\end{tabular}
+
+\textbf{为什么 Boot 必须在 0x08000000}：\texttt{BOOT0=0} 时 CPU 上电只从
+0x08000000 取向量表，所以这个地址必须是"第一个跑起来的程序"。
+
+\textbf{为什么跳转标志放在 0x08060000（你问的核心）}：三个理由——
+
+\begin{enumerate}
+  \item \textbf{独立成扇}：改标志要先整扇擦除，如果标志和代码同扇区，
+        一擦就把代码擦没了；S7 只存标志，擦它不伤任何程序；
+  \item \textbf{远离代码区}：S7 是最后一个扇区，Boot/App 升级、写入时
+        永远不会碰到它；
+  \item \textbf{空间充裕}：整个 128KB 只存 4 字节标志虽然"浪费"，但换来
+        绝对安全，而且剩下的空间还能存升级参数、日志。
+\end{enumerate}
+
+所以烧录时写 \texttt{0x08060000} 就是写 S7 首地址——这一步在
+\emph{「切换 App」} 时用 \texttt{flash write\_bank} 完成。
+
+\subsection{链接脚本与 RAM 布局}
+
+程序编译后按段（section）存放，由链接脚本（\texttt{.ld}）决定每段放哪。
+本工程 \texttt{linker/*.ld} 的核心：
+
+\begin{lstlisting}[style=generic]
+FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 32K   ; App1 示例
+RAM   (xrw)     : ORIGIN = 0x20000000, LENGTH = 128K
+_estack = 0x20020000;   ; RAM 顶部 = 初始栈指针
+\end{lstlisting}
+
+各段的作用：
+
+\begin{itemize}
+  \item \texttt{.isr\_vector}：向量表，永远放 Flash 最前面；
+  \item \texttt{.text}：代码，放 Flash；
+  \item \texttt{.rodata}：只读常量（字符串、查表数据），放 Flash；
+  \item \texttt{.data}：已初始化全局变量，初值暂存 Flash，
+        上电时拷到 RAM；
+  \item \texttt{.bss}：未初始化/清零的全局变量，直接放 RAM，上电清零；
+  \item \texttt{堆 + 栈}：放在 RAM 末尾（\texttt{\_Min\_Heap\_Size} /
+        \texttt{\_Min\_Stack\_Size} 定义大小）。
+\end{itemize}
+
+RAM 一共 128KB（0x20000000--0x2001FFFF），栈顶 \texttt{0x20020000}
+就是整个 RAM 的最高地址。App 和 Boot 各自独立使用这份 RAM（同一时刻只有
+一个在跑，不会冲突）。
+
+\subsection{上电启动流程}
+
+从按复位键到 \texttt{main()}，CPU 依次完成：
+
+\begin{enumerate}
+  \item 读 \texttt{0x00000000}（映射到 0x08000000）$\to$ 存入 SP；
+  \item 读 \texttt{0x00000004} $\to$ 得到 \texttt{Reset\_Handler} 入口；
+  \item 执行启动文件 \texttt{startup\_stm32f40\_41xxx.s}：
+        \begin{enumerate}
+          \item 把 \texttt{.data} 初值从 Flash 拷到 RAM；
+          \item 清零 \texttt{.bss}；
+          \item 调用 \texttt{SystemInit()}（配置时钟 PLL）；
+        \end{enumerate}
+  \item 跳进 \texttt{main()}。
+\end{enumerate}
+
+在本工程 Boot 里，\texttt{main()} 只做一件事——\textbf{看标志、选 App}：
+
+\begin{lstlisting}[style=generic]
+int main(void)
+{
+    SystemInit();
+    uart_init();
+    switch (iap_read_flag()) {      // 读 0x08060000
+        case FLAG_UPGRADE:  iap_upgrade();            break;
+        case FLAG_RUN_APP2: iap_load_app(APP2_ADDR);  break;
+        default:            iap_load_app(APP1_ADDR);  break;
+    }
+    while (1) { }
+}
+\end{lstlisting}
+
+\subsection{跳转机制：向量表与 VTOR}
+
+每个程序自带一张\textbf{向量表}：第 0 项是栈顶，第 1 项是复位入口，
+后面是各中断服务函数地址。CPU 发生中断时，就按"当前向量表的位置"查表。
+
+App 被链接到别处后（如 App1 在 0x08008000），它的向量表也在那里。
+但 CPU 默认向量表还在 0x08000000（Boot 区）——所以跳转前必须把
+\texttt{SCB->VTOR} 拨到 App 基址，否则一来中断就查错表、直接死机。
+这就是 \texttt{iap\_load\_app} 的完整逻辑：
+
+\begin{lstlisting}[style=generic]
+void iap_load_app(uint32_t appxaddr)
+{
+    uint32_t sp    = *(volatile uint32_t *)appxaddr;
+    uint32_t reset = *(volatile uint32_t *)(appxaddr + 4);
+
+    if ((sp >= 0x20000000u) && (sp <= 0x20020000u)) {  // 栈顶在 RAM 范围
+        __disable_irq();
+        SCB->VTOR = appxaddr;    // ① 向量表拨过去
+        __set_MSP(sp);           // ② 换栈
+        ((iapfun)reset)();       // ③ 跳到 App 的 Reset_Handler
+    }
+}
+\end{lstlisting}
+
+\begin{itemize}
+  \item \texttt{0x20000000} / \texttt{0x20020000} 分别是 RAM 的起止边界，
+        加 \texttt{u} 后缀表示无符号整数（避免与 \texttt{uint32\_t} 比较的告警）；
+  \item 用 \texttt{<=} 而不是 \texttt{<}：因为本工程栈顶恰好等于 RAM 顶
+        \texttt{0x20020000}，\texttt{<} 会把合法的栈顶误判为非法；
+  \item 跳之前\textbf{关中断}，防止切换瞬间有中断闯进来查旧向量表。
+\end{itemize}
+
+App 自己的 \texttt{main()} 第一行也要写
+\texttt{SCB->VTOR = 自己的基址}，保证中断路由正确。
+
+\subsection{OTA 升级业务设计}
+
+\subsubsection{跳转标志（三态）}
+
+标志存在 S7 首地址 \texttt{0x08060000}，4 字节：
+
+\begin{tabular}{lll}
+\toprule
+\textbf{值} & \textbf{含义} & \textbf{何时写入} \\
+\midrule
+0xFFFFFFFF & 出厂默认 & Flash 擦除后天然如此 \\
+0x0000AAAA & 跳 App1 & 升级 App1 成功后 Boot 写 \\
+0x00005555 & 跳 App2 & 升级 App2 成功后 Boot 写 \\
+0x00003333 & 进升级模式 & App 想升级时先写此值再复位 \\
+\bottomrule
+\end{tabular}
+
+\textbf{为什么三态而不是两态}：擦除后天然是 0xFFFFFFFF，表示"回默认"，
+即使标志意外被擦掉，系统也有确定行为，不会变砖。
+
+\subsubsection{升级协议与校验}
+
+上位机通过串口发一帧：
+
+\begin{lstlisting}[style=generic]
+[0xAA][0x55][target:1B][size:2B 小端][bin 数据...][crc16:2B 小端]
+target: 1=App1, 2=App2
+crc16: 只对 bin 数据计算（CCITT 0x1021，初值 0xFFFF）
+\end{lstlisting}
+
+Boot 收帧流程：等帧头 $\to$ 收目标区号 $\to$ 收大小 $\to$ 收数据
+$\to$ 收 CRC $\to$ 计算 CRC 比对 $\to$ 通过后擦目标扇区、逐字写入
+$\to$ 写跳转标志 $\to$ 复位。
+
+\textbf{为什么需要「大小 + CRC 双重校验」}：串口会丢字节、错位。
+只按长度收满就写，收到坏 bin 就变砖；CRC 能查出内容是否完好，
+两个都过了才允许写 flash。
+
+\subsubsection{双区 A/B 为什么能不停机}
+
+App1 在跑的时候，Boot 往 \textbf{App2}（S4）写新固件——两个区互不干扰。
+写完复位切换，停机时间只有复位那一瞬。App2 在跑时同理可写 App1。
+对比单区方案：升级时必须退回 Boot 等收完数据，系统全程停机。
+
+\subsubsection{防砖设计}
+
+\begin{enumerate}
+  \item \textbf{先擦目标扇区，再写，再置标志}：任何时刻掉电，标志都指向
+        "可用的旧区"，不会跳到写了一半的新区；
+  \item \textbf{写后读回验证}：写完比对，不一致就不置跳转标志；
+  \item \textbf{App 启动自检}：App 校验自己关键数据失败时，跳回另一个区，
+        天然回退到旧版本；
+  \item \textbf{Boot 永不更新}：只要 Boot 在，随时能进升级模式救砖。
+\end{enumerate}
+
+\subsection{完整升级时序（串联本章所有概念）}
+
+\begin{enumerate}
+  \item App1 运行中收到升级指令 $\to$ 写 \texttt{0x3333} 标志 $\to$ 复位；
+  \item Boot 启动，读标志 = 0x3333 $\to$ 进入 \texttt{iap\_upgrade()}；
+  \item Boot 串口收帧，CRC 校验通过；
+  \item 擦除 S4（App2 所在扇区）$\to$ 写入新固件 $\to$ 读回验证；
+  \item 写 \texttt{0x5555}（跳 App2）$\to$ 复位；
+  \item Boot 再启动，读 0x5555 $\to$ \texttt{SCB->VTOR=0x08010000}，
+        跳转 App2，PE4 LED 闪烁——升级完成。
+\end{enumerate}
+
+升级链路不局限于串口：帧格式与校验逻辑可以原样复用到 CAN、无线数传等
+任何通信链路（本工程后续可结合 MAVLink 业务把升级帧挂到数传上）。

@@ -1,0 +1,112 @@
+\section{本项目修改记录}
+
+本章记录本工程从 ST 模板到「可编译的 CMake 工程」过程中所做的关键修改，
+以及每处修改的\textbf{原因}。理解这些原因，比记住改了什么更重要。
+
+\subsection{背景：Homebrew 工具链没有 newlib}
+
+在 macOS 上通过 Homebrew 安装的
+\texttt{arm-none-eabi-gcc}（如 \texttt{arm-none-eabi-gcc 16.2.0}）
+是用 \texttt{--without-headers} 编译的：它只带 \texttt{libgcc}，
+\textbf{不带 newlib}，因此工具链里没有 \texttt{libc.a} / \texttt{libm.a}，
+也没有 \texttt{nosys.specs} / \texttt{nano.specs}。
+
+而 ST 的模板工程默认假设工具链带有完整的 newlib，这导致了下面前两处修改。
+
+\subsection{修改一：链接脚本去掉不存在的库}
+
+ST 模板的链接脚本里有一段 \texttt{/DISCARD/}，让链接器去打开
+\texttt{libc.a}、\texttt{libm.a}、\texttt{libgcc.a} 并丢弃其内容：
+
+\begin{lstlisting}[style=generic]
+/* 修改前（ST 模板） */
+/DISCARD/ :
+{
+  libc.a ( * )
+  libm.a ( * )
+  libgcc.a ( * )
+}
+\end{lstlisting}
+
+由于本工具链没有 \texttt{libc.a} / \texttt{libm.a}，链接时报错：
+
+\begin{lstlisting}[style=generic]
+arm-none-eabi-ld: cannot find libc.a: Invalid argument
+collect2: error: ld returned 1 exit status
+\end{lstlisting}
+
+又因为本工程使用了 \texttt{-nostdlib}，本来就不链接这些标准库，
+所以这个 \texttt{/DISCARD/} 块是多余的。修改后只保留存在的 \texttt{libgcc.a}：
+
+\begin{lstlisting}[style=generic]
+/* 修改后 */
+/DISCARD/ :
+{
+  libgcc.a ( * )
+}
+\end{lstlisting}
+
+\subsection{修改二：启动文件去掉 \texttt{\_\_libc\_init\_array}}
+
+ST 模板的启动文件在进入 \texttt{main} 之前会调用 \texttt{\_\_libc\_init\_array}，
+该函数负责执行 C++ 静态构造函数，由 newlib 提供。纯 C 工程没有静态构造函数，
+且本工具链没有 newlib，因此链接时报
+\texttt{undefined reference to \_\_libc\_init\_array}。
+
+\begin{lstlisting}[style=generic]
+/* 修改前 */
+bl  SystemInit
+bl  __libc_init_array   ; 需要 newlib，本工具链没有
+bl  main
+
+/* 修改后 */
+bl  SystemInit
+bl  main
+\end{lstlisting}
+
+删除后启动流程依然是完整的：\texttt{Reset\_Handler} $\to$ 拷贝 \texttt{.data}
+$\to$ 清零 \texttt{.bss} $\to$ \texttt{SystemInit()} $\to$ \texttt{main()}。
+
+\subsection{修改三：CMake 将厂商头文件标记为 SYSTEM}
+
+ST 的 \texttt{stm32f4xx.h} 里存在重复的宏定义（如
+\texttt{DBGMCU\_APB2\_FZ\_DBG\_TIM1\_STOP} 定义了两次），GCC 16 会报
+\texttt{redefined} 警告。厂商头文件的告警不应算作本工程的告警，
+因此把它们作为 \texttt{SYSTEM} include（即 \texttt{-isystem}）处理：
+
+\begin{lstlisting}[style=generic]
+# 厂商头文件：SYSTEM，忽略其内部告警
+target_include_directories(${TARGET} SYSTEM PRIVATE
+    ${CMAKE_SOURCE_DIR}/Driver/CMSIS/Include
+    ${CMAKE_SOURCE_DIR}/Driver/CMSIS/Device/ST/STM32F4xx/Include
+    ${CMAKE_SOURCE_DIR}/Driver/STM32F4xx_StdPeriph_Driver/inc
+)
+\end{lstlisting}
+
+这样既屏蔽了 ST 头文件自身的告警，又不会在以后升级 CMSIS 时丢失修改。
+
+\subsection{修改四：修正 system\_stm32f4xx.c 的误导缩进}
+
+ST 的 \texttt{system\_stm32f4xx.c} 里，忙等 \texttt{while} 后面手滑残留了一个
+空的 \texttt{\{ \}} 块，触发 \texttt{-Wmisleading-indentation} 告警：
+
+\begin{lstlisting}[style=generic]
+/* 修改前 */
+while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
+{
+}                        ; 残留空块，缩进有误导性
+
+/* 修改后 */
+while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL);
+\end{lstlisting}
+
+\subsection{修改五：启动文件命名修正}
+
+原目录下 \texttt{startup\_stm32f427x.s} 命名有误（少了末尾一个 \texttt{x}），
+已更名为 \texttt{startup\_stm32f427xx.s}，与其它型号命名保持一致。
+
+\subsection{修改六：应用/设备代码分层（详见第 \ref{sec:restructure} 节）}
+
+把用户代码（\texttt{main.c}、\texttt{stm32f4xx\_conf.h}）从 \texttt{Core/}
+中拆出，独立成 \texttt{User/}，与 ST 设备代码 \texttt{Core/} 分层。
+具体见下一章。

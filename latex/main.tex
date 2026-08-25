@@ -1,0 +1,78 @@
+% !TEX program = xelatex
+\documentclass[UTF8, a4paper, 11pt]{ctexart}
+
+% ----------------------------- 排版设置 ---------------------------------
+\usepackage{geometry}
+\geometry{margin=2.2cm}
+
+\usepackage{amsmath}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[colorlinks, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref}
+
+% ----------------------------- 代码高亮 ---------------------------------
+\definecolor{codebg}{RGB}{247,247,247}
+\definecolor{codekw}{RGB}{0,0,180}
+\definecolor{codestr}{RGB}{180,0,0}
+\definecolor{codecmt}{RGB}{0,130,0}
+\definecolor{codefrm}{RGB}{220,220,220}
+
+\lstdefinestyle{code}{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  showstringspaces=false,
+  frame=single,
+  rulecolor=\color{codefrm},
+  keywordstyle=\color{codekw},
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecmt},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  xleftmargin=2em,
+  framexleftmargin=1.5em,
+  tabsize=4,
+  language=C,
+}
+
+% CMake / Bash / 汇编没有专门的 listings 语言，用通用样式
+\lstdefinestyle{generic}{
+  style=code,
+  language=,
+}
+\lstdefinestyle{bash}{
+  style=code,
+  language=bash,
+}
+
+% ----------------------------- 标题信息 ---------------------------------
+\title{\bfseries STM32F407 裸机工程手册\\
+\large —— 基于 CMake + arm-none-eabi-gcc 的构建、目录结构与使用说明}
+\author{项目：MAKE}
+\date{2026 年 8 月}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\clearpage
+
+% ----------------------------- 正文章节 ---------------------------------
+\input{chapters/01-intro}
+\input{chapters/02-directory}
+\input{chapters/03-modifications}
+\input{chapters/04-restructure}
+\input{chapters/05-build-unix}
+\input{chapters/06-build-windows}
+\input{chapters/07-cmake}
+\input{chapters/08-c-language}
+\input{chapters/09-embedded}
+\input{chapters/10-vscode}
+\input{chapters/11-memory-ota}
+
+\end{document}

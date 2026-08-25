@@ -1,0 +1,93 @@
+\section{Windows 构建方法}
+
+本工程完全跨平台，Windows 下同样用 CMake + arm-none-eabi-gcc 构建，
+只是工具链安装方式和生成器（Generator）略有不同。
+
+\subsection{第一步：安装交叉工具链}
+
+三选一即可：
+
+\begin{enumerate}
+  \item \textbf{ARM 官方工具链（推荐）}：
+        从 \url{https://developer.arm.com/downloads/-/arm-gnu-toolchain-downloads}
+        下载 Windows 版的 \texttt{arm-gnu-toolchain-*-mingw-w64-i686-arm-none-eabi.zip}，
+        解压到例如 \texttt{C:\textbackslash tools\textbackslash arm-gnu-toolchain}。
+  \item \textbf{MSYS2（包管理，方便升级）}：
+        安装 MSYS2 后执行
+        \texttt{pacman -S mingw-w64-x86\_64-arm-none-eabi-gcc}。
+  \item \textbf{复用 STM32CubeIDE 自带工具链}：
+        如果装了 STM32CubeIDE，其安装目录下有
+        \texttt{STM32CubeIDE\textbackslash plugins\textbackslash
+        com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.*\textbackslash
+        tools\textbackslash bin}。
+\end{enumerate}
+
+\subsection{第二步：安装 CMake 与生成器}
+
+\begin{itemize}
+  \item 安装 CMake（\url{https://cmake.org/download/}），
+        安装时勾选「Add CMake to the system PATH」。
+  \item 生成器二选一：
+    \begin{itemize}
+      \item \textbf{MinGW Makefiles}：需要 \texttt{mingw32-make.exe}，
+            可从 MSYS2 装 \texttt{mingw-w64-x86\_64-make}，或装独立的 MinGW；
+      \item \textbf{Ninja}：下载 \texttt{ninja.exe} 放入 PATH（推荐，速度快）。
+    \end{itemize}
+\end{itemize}
+
+\subsection{第三步：配置 PATH}
+
+把工具链的 \texttt{bin} 目录加入系统 PATH，例如
+\texttt{C:\textbackslash tools\textbackslash arm-gnu-toolchain\textbackslash
+13.2.Rel1\textbackslash bin}。
+验证安装：
+
+\begin{lstlisting}[style=bash]
+arm-none-eabi-gcc --version
+cmake --version
+ninja --version        # 若用 Ninja
+\end{lstlisting}
+
+\subsection{第四步：构建}
+
+在工程根目录打开 PowerShell 或 cmd：
+
+\begin{lstlisting}[style=bash]
+# 删除旧构建目录（可选）
+Remove-Item -Recurse -Force build
+
+# 用工具链文件配置（Ninja 生成器）
+cmake -S . -B build -G Ninja `
+  -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/arm-none-eabi-gcc.cmake"
+
+# 编译
+cmake --build build
+\end{lstlisting}
+
+若用 MinGW Makefiles，把 \texttt{-G Ninja} 换成 \texttt{-G "MinGW Makefiles"} 即可。
+
+\subsection{Windows 与 macOS 的差异}
+
+\begin{itemize}
+  \item \textbf{newlib 是否自带}：ARM 官方 Windows 工具链是\textbf{带 newlib} 的
+        （有 \texttt{libc.a} / \texttt{libm.a} / \texttt{nosys.specs}），
+        因此 ST 模板原始的链接脚本 \texttt{/DISCARD/} 块本可以正常使用；
+        但本工程已经按「无标准库」方式精简（见第 \ref{sec:restructure} 前的修改记录），
+        在 Windows 上同样能编译，两套配置兼容。
+  \item \textbf{路径分隔符}：工具链文件里的编译器名 \texttt{arm-none-eabi-gcc}
+        不带 \texttt{.exe} 后缀，CMake 在 Windows 上会自动补 \texttt{.exe} 查找，
+        无需修改。
+  \item \textbf{换行符}：Windows 下 git 若开启 \texttt{core.autocrlf}，
+        可能把 \texttt{.s}/\texttt{.c} 文件换行改为 CRLF，一般不影响编译；
+        若出现大量无关 diff，建议在 \texttt{.gitattributes} 里对源码文件强制 LF。
+\end{itemize}
+
+\subsection{常见问题}
+
+\begin{description}
+  \item[\texttt{arm-none-eabi-gcc} 不是内部或外部命令]：PATH 未配置或未重开终端，
+        重新打开终端让 PATH 生效。
+  \item[CMake 找不到编译器]：工具链文件里写的是相对 PATH 的名字，
+        确认 \texttt{bin} 目录在 PATH 中，或在工具链文件里改成绝对路径。
+  \item[\texttt{mingw32-make} 找不到]：改用 Ninja，或安装 MinGW 的 make。
+\end{description}

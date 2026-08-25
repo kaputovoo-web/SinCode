@@ -1,0 +1,110 @@
+\section{C 语言要点（嵌入式视角）}
+
+裸机开发里，C 语言的一些特性会被高频使用，理解它们有助于读懂 CMSIS 和
+标准外设库源码。本节挑重点讲。
+
+\subsection{固定宽度整数：stdint.h}
+
+嵌入式里寄存器宽度是硬件定死的，必须用固定宽度类型而不是 \texttt{int}：
+
+\begin{lstlisting}[style=code]
+#include <stdint.h>
+
+uint32_t value;   // 一定是 32 位无符号
+uint16_t reg16;   // 16 位
+uint8_t  flag;    // 8 位
+int32_t  signed32;
+\end{lstlisting}
+
+\texttt{int} 的宽度随平台/编译器而变，在寄存器操作里用 \texttt{int} 是隐患。
+
+\subsection{volatile：防止编译器优化掉内存访问}
+
+外设寄存器是\textbf{内存映射}的，硬件会异步修改它们，必须用
+\texttt{volatile} 告诉编译器「每次都要真正读写内存，不能缓存、不能省略」：
+
+\begin{lstlisting}[style=code]
+volatile uint32_t *reg = (volatile uint32_t *)0x40023800;
+*reg = 0x01;       // 必须真正写到该地址
+while (*reg & 0x02) { /* 必须每次重新读 */ }
+\end{lstlisting}
+
+漏掉 \texttt{volatile} 的典型后果是：编译器把循环里的读取优化掉，导致忙等死循环。
+
+\subsection{CMSIS 的寄存器访问模型}
+
+CMSIS 不直接写裸指针，而是用一个\textbf{结构体覆盖}外设地址空间，
+并用 \texttt{\_\_IO}/\texttt{\_\_IM}/\texttt{\_\_OM} 标注读写属性：
+
+\begin{lstlisting}[style=code]
+/* __IO = volatile 可读可写，__IM = 只读，__OM = 只写 */
+typedef struct {
+  __IO uint32_t MODER;    /* 模式寄存器 */
+  __IO uint32_t OTYPER;
+  __IO uint32_t OSPEEDR;
+  __IO uint32_t PUPDR;
+  __IO uint32_t IDR;
+  __IO uint32_t ODR;
+} GPIO_TypeDef;
+
+#define GPIOD ((GPIO_TypeDef *)0x40020C00)  /* 外设基地址 */
+GPIOD->ODR |= (1U << 12);                    /* 直接操作寄存器 */
+\end{lstlisting}
+
+这种写法类型安全、可读性好，是 STM32 库（HAL/StdPeriph/CMSIS）的通用套路。
+
+\subsection{位操作}
+
+\begin{lstlisting}[style=code]
+#define BIT(n) (1UL << (n))
+
+uint32_t r = 0;
+
+r |=  BIT(12);      // 置位：第 12 位 = 1
+r &= ~BIT(12);      // 清位：第 12 位 = 0
+r ^=  BIT(12);      // 翻转
+if (r & BIT(12)) {} // 测试
+
+// 写多位（例如写 MODE 字段，占 2 位）
+r = (r & ~(0x3UL << 10)) | (value << 10);   // 先清空字段，再写入
+\end{lstlisting}
+
+「先清空、再写入」是操作寄存器字段的标准范式，库里的
+\texttt{GPIO\_Init} 等函数内部正是这么写的。
+
+\subsection{freestanding 与 -nostdlib}
+
+标准 C 区分「宿主环境（hosted）」和「独立环境（freestanding）」。
+裸机没有操作系统，属于 freestanding：
+
+\begin{itemize}
+  \item 编译选项加了 \texttt{-ffreestanding}，告诉编译器不假设有 \texttt{libc}；
+  \item 链接选项加了 \texttt{-nostdlib -nostartfiles}，不链接标准库和启动文件；
+  \item 因此 \texttt{printf}/\texttt{malloc}/\texttt{memcpy} 等\textbf{默认不可用}。
+        需要时要么自己实现，要么链接 newlib 并配置 \texttt{syscalls}。
+\end{itemize}
+
+这也是本工程在链接脚本/启动文件里去掉 \texttt{libc.a} 和
+\texttt{\_\_libc\_init\_array} 的根本原因。
+
+\subsection{weak 弱符号与中断处理函数}
+
+启动文件里每个中断向量都指向一个\textbf{弱符号}的默认处理函数：
+
+\begin{lstlisting}[style=generic]
+.weak  WWDG_IRQHandler
+.thumb_set WWDG_IRQHandler, Default_Handler
+\end{lstlisting}
+
+\texttt{.weak} 表示「如果你在别处定义了同名函数，就用你的；否则用默认的」。
+所以用户在 \texttt{main.c} 里写一个 \texttt{void TIM2\_IRQHandler(void)} 就能
+覆盖默认实现、接管中断，无需改启动文件。
+
+\subsection{const 与 flash 布局}
+
+\begin{lstlisting}[style=code]
+const char msg[] = "hello";   // 放到 .rodata（Flash），不占 RAM
+\end{lstlisting}
+
+裸机 RAM 很小，常量应尽量用 \texttt{const} 让链接器把它们放进 Flash 的
+只读段，而不是可写的 \texttt{.data}。

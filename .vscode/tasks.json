@@ -1,0 +1,51 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Clean & Rebuild (arm)",
+            "type": "shell",
+            "command": "arm -rf build/arm; cmake --preset arm; cmake --build --preset arm",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Flash Download (OpenOCD)",
+            "type": "shell",
+            "command": "openocd",
+            "args": [
+                "-f", "openocd.cfg",
+                "-c", "program build/arm/MAKE.hex verify reset exit"
+            ],
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "Build & Download",
+            "dependsOn": ["Clean & Rebuild (arm)", "Flash Download (OpenOCD)"],
+            "dependsOrder": "sequence",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "into app2",
+            "type": "shell",
+            "command": "openocd -f openocd.cfg -c \"program build/arm/flag_app2.bin 0x08060000 verify reset exit",
+            "problemMatcher": []
+        },
+        {
+            "label": "into app1",
+            "type": "shell",
+            "command": "openocd -f openocd.cfg -c \"program build/arm/flag_app1.bin 0x08060000 verify reset exit",
+            "problemMatcher": []
+        },
+        {
+            "label": "into app2",
+            "type": "shell",
+            "command": "openocd -f openocd.cfg -c \"program build/arm/flag_upgrade.bin 0x08060000 verify reset exit",
+            "problemMatcher": []
+        }
+    ]
+}

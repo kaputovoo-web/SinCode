@@ -1,0 +1,57 @@
+\section{项目简介}
+
+本项目是一个 \textbf{STM32F407} 系列微控制器的裸机（Bare-metal）工程，
+使用 \textbf{CMake} 组织构建，配合 \textbf{arm-none-eabi-gcc} 交叉工具链，
+采用 ST 官方较老的 \textbf{标准外设库（StdPeriph Driver）} 而非 HAL 库。
+
+\subsection{硬件目标}
+
+\begin{itemize}
+  \item 芯片：STM32F407VET6
+  \item 内核：ARM Cortex-M4（带 FPU），主频最高 168\,MHz
+  \item Flash：512\,KB；RAM：192\,KB（含 64\,KB CCM）
+  \item 当前演示功能：GPIO 点亮/翻转 PD12 上的 LED（跑马灯）
+\end{itemize}
+
+\subsection{软件栈}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    组件 & 说明 \\
+    \midrule
+    构建系统 & CMake（$\geq 3.24$），Unix Makefiles / Ninja / MinGW \\
+    交叉编译器 & arm-none-eabi-gcc（本项目用 GNU 16.2.0） \\
+    库 & ST 标准外设库 StdPeriph + ARM CMSIS \\
+    链接脚本 & linker/STM32F407VET6.ld \\
+    启动文件 & startup/startup\_stm32f40\_41xxx.s \\
+    文档 & 本文档（LaTeX，ctex + xelatex） \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{工程特点}
+
+\begin{itemize}
+  \item \textbf{纯 C + 汇编}，不依赖任何 IDE 工程文件（无 Keil/IAR 工程）。
+  \item 使用 \lstinline|-nostdlib -nostartfiles|，完全不链接标准 C 库，
+        启动流程由自己的 \texttt{startup} 文件完成。
+  \item 工具链文件（\texttt{cmake/arm-none-eabi-gcc.cmake}）与构建脚本解耦，
+        跨平台（macOS / Linux / Windows）复用同一份 CMake。
+  \item 应用代码（\texttt{User/}）与 ST 设备支持代码（\texttt{Core/}）、
+        厂商库（\texttt{Driver/}）分层清晰。
+\end{itemize}
+
+\subsection{为什么用 CMake 而不是 IDE}
+
+传统 STM32 开发通常依赖 Keil MDK / IAR / STM32CubeIDE 等 IDE，
+优点是开箱即用，缺点是工程文件与 IDE 绑定、难以做持续集成（CI）、
+难以在命令行自动化构建。使用 CMake 的好处是：
+
+\begin{enumerate}
+  \item 一份 \texttt{CMakeLists.txt} 跨三平台复用，无需手工维护多个工程文件；
+  \item 构建过程可脚本化，方便接入 CI / 自动化测试；
+  \item 依赖关系显式、可追溯，新增/删除源文件只需改一处；
+  \item 不绑定具体编辑器，VSCode / CLion / Vim 均可配合使用。
+\end{enumerate}

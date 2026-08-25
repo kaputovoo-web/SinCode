@@ -1,0 +1,84 @@
+\section{目录优化：User 与 Core 分离}\label{sec:restructure}
+
+\subsection{问题：用户代码与 ST 代码混在一起}
+
+最初的工程把 \texttt{main.c}（你的应用代码）和 \texttt{system\_stm32f4xx.c}
+（ST 的系统代码）都放在 \texttt{Core/src/} 里，\texttt{stm32f4xx\_conf.h}
+也放在 \texttt{Core/inc/} 里：
+
+\begin{lstlisting}[style=generic]
+Core/
+├── src/
+│   ├── main.c                 # 用户代码（不该在这里）
+│   └── system_stm32f4xx.c     # ST 系统代码
+└── inc/
+    └── stm32f4xx_conf.h       # 应用配置（不该在这里）
+\end{lstlisting}
+
+这样做的坏处是：\textbf{你的代码和厂商代码边界不清}。当升级 CMSIS / 标准外设库
+（通常整个替换 \texttt{Driver/} 目录）时，容易误伤自己的代码；反之，
+定位「我写的代码」时也要在 ST 源码里翻找。
+
+\subsection{分层后的结构}
+
+将应用层与设备支持层分开：
+
+\begin{lstlisting}[style=generic]
+User/                            # 应用层：你写的代码
+├── src/main.c                   # 应用入口
+└── inc/stm32f4xx_conf.h         # 外设库配置
+
+Core/                            # 设备支持层：ST 系统代码
+├── src/system_stm32f4xx.c       # 时钟初始化
+└── inc/                         # 预留：设备相关头文件
+\end{lstlisting}
+
+分层原则：
+
+\begin{itemize}
+  \item \textbf{User/}：业务逻辑、外设应用封装，随项目变化频繁修改；
+  \item \textbf{Core/}：与芯片强相关的系统代码，改动少，接近厂商源码；
+  \item \textbf{Driver/}：纯第三方库，只读，升级时整体替换。
+\end{itemize}
+
+\subsection{对应的 CMake 改动}
+
+源文件列表与头文件路径随之更新：
+
+\begin{lstlisting}[style=generic]
+add_executable(${TARGET}
+    ${CMAKE_SOURCE_DIR}/User/src/main.c          # 原来在 Core/src
+    ${CMAKE_SOURCE_DIR}/Core/src/system_stm32f4xx.c
+    ...
+)
+
+target_include_directories(${TARGET} PRIVATE
+    ${CMAKE_SOURCE_DIR}/User/inc                 # 原来在 Core/inc
+    ${CMAKE_SOURCE_DIR}/Core/inc
+)
+\end{lstlisting}
+
+\subsection{后续可进一步优化的方向}
+
+当前结构已经够用，但如果工程继续增长，可以考虑：
+
+\begin{enumerate}
+  \item \textbf{把 Driver 拆成独立仓库 / Git submodule}：
+        厂商库体积大且与业务无关，用 submodule 引入可保持主仓库干净、升级方便。
+  \item \textbf{引入 \texttt{App/} 或按功能分子目录}：
+        当 \texttt{User/src/} 下文件变多时，按功能拆成
+        \texttt{User/src/bsp/}、\texttt{User/src/app/} 等，用
+        \texttt{target\_sources} 分目录添加。
+  \item \textbf{用 CMake 的 object library / interface library}：
+        把 \texttt{Driver/}、\texttt{Core/} 各自封装成一个静态库目标，
+        主程序只链接这些库，依赖关系更清晰、编译更可复用。
+  \item \textbf{用 \texttt{CMakePresets.json} 管理多套配置}：
+        例如一份 debug（\texttt{-O0 -g}）一份 release（\texttt{-Os}），
+        避免命令行里反复写长参数。
+  \item \textbf{提取 CPU 编译选项到工具链文件或一个变量}：
+        目前 \texttt{CPU\_FLAGS} 定义在 \texttt{CMakeLists.txt} 顶部，
+        若以后支持多个芯片型号，可改成按型号选择的缓存变量。
+  \item \textbf{补充 \texttt{.gitignore}}：忽略 \texttt{build/}、
+        \texttt{*.elf}/\texttt{*.bin}/\texttt{*.hex}/\texttt{*.map} 等产物，
+        目前这些文件仍出现在 \texttt{git status} 里。
+\end{enumerate}

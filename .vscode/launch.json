@@ -1,0 +1,17 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Build & Download",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+            "cwd": "${workspaceFolder}",
+            "executable": "${workspaceFolder}/build/arm/MAKE",
+            "configFiles": ["${workspaceFolder}/openocd.cfg"],
+            "runToEntryPoint": "main",
+            "showDevDebugOutput": "none",
+            "gdbPath": "E:/Tools/Env/DevEnv/DevEnv/GNU-tools-for-STM32/bin/arm-none-eabi-gdb.exe"
+        }
+    ]
+}

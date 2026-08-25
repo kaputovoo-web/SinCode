@@ -1,0 +1,16 @@
+# build
+build/arm
+
+# LaTeX
+latex/*.aux
+latex/*.log
+latex/*.out
+latex/*.toc
+latex/*.xdv
+latex/*.fls
+latex/*.fdb_latexmk
+latex/*.synctex*
+
+# others
+.DS_Store
+Thumbs.db

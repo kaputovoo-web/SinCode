@@ -1,0 +1,74 @@
+\section{目录结构及使用}
+
+本节说明工程顶层目录的职责，以及日常开发时应该在哪里增删文件。
+
+\subsection{整体目录树}
+
+\begin{lstlisting}[style=generic]
+MAKE/
+├── CMakeLists.txt                # 顶层构建脚本（源文件、头文件、编译/链接选项）
+├── CMakePresets.json             # CMake 预设（目前为空，可扩展）
+├── cmake/
+│   └── arm-none-eabi-gcc.cmake   # 交叉编译工具链文件
+├── User/                         # ★ 应用层：你的业务代码
+│   ├── src/
+│   │   └── main.c                # 应用入口（LED 演示）
+│   └── inc/
+│       └── stm32f4xx_conf.h      # 外设库配置（启用哪些外设）
+├── Core/                         # ★ 设备支持层：ST 提供的系统代码
+│   ├── src/
+│   │   └── system_stm32f4xx.c    # 时钟初始化 SystemInit/SetSysClock
+│   └── inc/                      # 预留：将来放设备相关的头文件
+├── Driver/                       # 厂商库（第三方，原则上只读不修改）
+│   ├── CMSIS/
+│   │   ├── Include/              # ARM Cortex-M 内核头文件
+│   │   └── Device/ST/STM32F4xx/Include/
+│   │       ├── stm32f4xx.h       # 设备寄存器定义
+│   │       └── system_stm32f4xx.h# 时钟函数声明
+│   └── STM32F4xx_StdPeriph_Driver/
+│       ├── inc/                  # 外设库头文件
+│       └── src/                  # 外设库实现
+├── startup/                      # 各型号启动文件（汇编 .s）
+├── linker/                       # 链接脚本（.ld）
+├── build/                        # 构建产物（应加入 .gitignore）
+└── latex/                        # 本文档（LaTeX）
+\end{lstlisting}
+
+\subsection{各目录职责}
+
+\begin{description}
+  \item[\texttt{User/}] 应用层，放你自己写的代码。新增模块（如 \texttt{led.c}、
+        \texttt{uart.c}）应放在 \texttt{User/src/}，对应头文件放 \texttt{User/inc/}。
+  \item[\texttt{Core/}] 设备支持层，放与芯片本身强相关的系统代码，
+        目前只有 ST 的 \texttt{system\_stm32f4xx.c}（时钟初始化）。
+        \texttt{Core/inc/} 预留，将来若有板级/设备级头文件可放这里。
+  \item[\texttt{Driver/}] 第三方厂商库（CMSIS + 标准外设库）。
+        这部分是 ST 官方源码，\textbf{原则上不要修改}，升级库时直接整体替换。
+  \item[\texttt{startup/}] 启动文件。每个芯片型号一个 \texttt{.s}，
+        本工程实际使用的是 \texttt{startup\_stm32f40\_41xxx.s}。
+  \item[\texttt{linker/}] 链接脚本，决定代码/数据在 Flash 和 RAM 中的布局。
+  \item[\texttt{cmake/}] 工具链文件，告诉 CMake 用哪套交叉编译器。
+  \item[\texttt{build/}] 构建输出目录（中间文件、\texttt{.elf/.bin/.hex/.map}），
+        由 CMake 生成，不应提交到版本库。
+  \item[\texttt{latex/}] 项目文档（本文档）。
+\end{description}
+
+\subsection{日常使用：新增一个源文件}
+
+假设要新增一个串口模块 \texttt{uart.c} / \texttt{uart.h}：
+
+\begin{enumerate}
+  \item 把 \texttt{uart.c} 放到 \texttt{User/src/}，\texttt{uart.h} 放到 \texttt{User/inc/}；
+  \item 在 \texttt{CMakeLists.txt} 的 \texttt{add\_executable} 里追加一行：
+\end{enumerate}
+
+\begin{lstlisting}[style=generic]
+add_executable(${TARGET}
+    ${CMAKE_SOURCE_DIR}/User/src/main.c
+    ${CMAKE_SOURCE_DIR}/User/src/uart.c      # 新增
+    ...
+)
+\end{lstlisting}
+
+头文件无需在 CMake 里逐一登记，因为 \texttt{User/inc} 已经在
+\texttt{target\_include\_directories} 里，编译器会自动搜索。

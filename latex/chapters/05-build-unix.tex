@@ -1,0 +1,68 @@
+\section{macOS / Linux 构建方法}
+
+\subsection{环境准备}
+
+\begin{enumerate}
+  \item 安装 CMake（$\geq 3.24$）；
+  \item 安装 arm-none-eabi 交叉工具链：
+    \begin{itemize}
+      \item macOS（Homebrew）：\texttt{brew install arm-none-eabi-gcc}
+            或 \texttt{brew install --cask gcc-arm-embedded}；
+      \item Linux：\texttt{sudo apt install gcc-arm-none-eabi}（Debian/Ubuntu）
+            或使用 ARM 官方工具链包。
+    \end{itemize}
+\end{enumerate}
+
+注意：Homebrew 的 \texttt{arm-none-eabi-gcc} 不带 newlib（见第
+\ref{sec:restructure} 前文的修改记录），因此本工程已按「无标准库」方式配置；
+若用 ARM 官方工具链（带 newlib），本工程同样可以正常编译。
+
+\subsection{构建步骤}
+
+在工程根目录执行：
+
+\begin{lstlisting}[style=bash]
+# 1) 删除旧构建目录（首次构建可省略）
+rm -rf build
+
+# 2) 用工具链文件配置，生成 Makefile
+cmake -S . -B build -G "Unix Makefiles" \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/arm-none-eabi-gcc.cmake
+
+# 3) 编译
+cmake --build build
+\end{lstlisting}
+
+\subsection{产物}
+
+编译成功后，\texttt{build/} 下会生成：
+
+\begin{lstlisting}[style=generic]
+build/MAKE       # ELF（含调试信息）
+build/MAKE.bin   # 裸二进制（烧录用）
+build/MAKE.hex   # Intel HEX（烧录用）
+build/MAKE.map   # 链接地址映射表
+\end{lstlisting}
+
+其中 \texttt{.bin}/\texttt{.hex} 由 \texttt{CMakeLists.txt} 里的
+\texttt{POST\_BUILD} 步骤调用 \texttt{arm-none-eabi-objcopy} 自动生成。
+
+\subsection{重新编译增量}
+
+修改代码后只需：
+
+\begin{lstlisting}[style=bash]
+cmake --build build
+\end{lstlisting}
+
+CMake 会自动重编被改动的文件并重新链接，速度很快。
+
+\subsection{更换生成器}
+
+也可以用 Ninja 加速：
+
+\begin{lstlisting}[style=bash]
+cmake -S . -B build -G Ninja \
+  -DCMAKE_TOOLCHAIN_FILE=$PWD/cmake/arm-none-eabi-gcc.cmake
+cmake --build build
+\end{lstlisting}

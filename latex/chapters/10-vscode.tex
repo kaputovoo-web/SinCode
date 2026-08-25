@@ -1,0 +1,234 @@
+\section{VS Code 开发与烧录}
+
+本章记录把本工程搬进 VS Code 之后「编译—烧录—调试」的完整配置，
+涉及四个文件：构建预设 \texttt{CMakePresets.json}、任务
+\texttt{tasks.json}、烧录配置 \texttt{openocd.cfg} 与快捷键
+\texttt{keybindings.json}。所有编译产物输出到 \texttt{build/arm/}，
+烧录地址为 Flash 起始 \texttt{0x08000000}。
+
+\subsection{总体工作流}
+
+\begin{enumerate}
+  \item \textbf{配置}：\texttt{cmake --preset arm}，按预设生成 Ninja 工程；
+  \item \textbf{构建}：\texttt{cmake --build --preset arm}，产出
+        \texttt{build/arm/MAKE.elf} 以及 \texttt{MAKE.bin}、
+        \texttt{MAKE.hex}；
+  \item \textbf{烧录}：OpenOCD 按 \texttt{openocd.cfg} 把
+        \texttt{MAKE.hex} 写入 Flash，校验后复位运行。
+\end{enumerate}
+
+这三步既能在 VS Code 里一键触发，也能在终端直接敲等价命令（见下文
+「常用终端命令」）。下面分别说明各配置文件。
+
+\subsection{构建预设 CMakePresets.json}
+
+预设把「生成器 + 工具链 + 输出目录」打包成一个名字 \texttt{arm}，
+之后配置只需一行 \texttt{cmake --preset arm}：
+
+\begin{lstlisting}[style=generic]
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "arm",
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/arm-none-eabi-gcc.cmake",
+      "binaryDir": "${sourceDir}/build/arm"
+    }
+  ],
+  "buildPresets": [
+    { "name": "arm", "configurePreset": "arm" }
+  ]
+}
+\end{lstlisting}
+
+要点：\texttt{binaryDir} 决定产物目录，本工程统一放在
+\texttt{build/arm/}，烧录命令与它保持一致即可。
+
+\subsection{VS Code 任务 tasks.json}
+
+任务（task）本质是「shell 命令的壳」：把要执行的命令、参数、分组打包成
+一个可反复触发的条目。本工程定义四个任务：
+
+\begin{lstlisting}[style=generic]
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build (arm)",
+      "type": "shell",
+      "command": "cmake --build --preset arm",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean & Rebuild (arm)",
+      "type": "shell",
+      "command": "Remove-Item -Recurse -Force build/arm; cmake --preset arm; cmake --build --preset arm",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Flash Download (OpenOCD)",
+      "type": "shell",
+      "command": "openocd",
+      "args": [
+        "-f", "openocd.cfg",
+        "-c", "program build/arm/MAKE.hex verify reset exit"
+      ],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build & Download",
+      "dependsOn": ["Build (arm)", "Flash Download (OpenOCD)"],
+      "dependsOrder": "sequence",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}
+\end{lstlisting}
+
+几个容易踩的坑：
+
+\begin{itemize}
+  \item \texttt{label} 是任务的唯一名字，\texttt{dependsOn} 按
+        label \textbf{精确匹配、区分大小写}。写错名字不会报编译错，
+        而是点按钮时提示「找不到任务」。
+  \item 一个任务只能有一个 \texttt{command}。想跑多条命令，
+        要么用分号 \texttt{;} 连成一句（PowerShell），要么拆成多个
+        任务再用 \texttt{dependsOn} 串联。
+  \item \texttt{"group": \{"kind": "build", "isDefault": true\}}
+        把它设为默认构建任务，按 \texttt{Ctrl+Shift+B} 直接执行，
+        不用再选。
+  \item \texttt{problemMatcher} 置空数组，避免 VS Code 把终端输出
+        误判成编译错误。
+\end{itemize}
+
+触发方式不止快捷键：\texttt{Ctrl+Shift+P} 输入
+\texttt{Tasks: Run Task} 可从列表选；终端面板右上角的
+下拉菜单里也有 \texttt{Run Task...}。
+
+\subsection{快捷键绑定 keybindings.json}
+
+把任务绑到专属快捷键（\texttt{Ctrl+Shift+P} 输入
+\texttt{Preferences: Open Keyboard Shortcuts (JSON)}）：
+
+\begin{lstlisting}[style=generic]
+// Place your key bindings in this file to override the defaults
+[
+  {
+    "key": "ctrl+alt+F",
+    "command": "workbench.action.tasks.runTask",
+    "args": "Clean & Rebuild (arm)"
+  },
+  {
+    "key": "ctrl+alt+O",
+    "command": "workbench.action.tasks.runTask",
+    "args": "Flash Download (OpenOCD)"
+  }
+]
+\end{lstlisting}
+
+注意：\texttt{args} 里的名字必须与 \texttt{tasks.json} 的
+\texttt{label} 完全一致。
+
+\subsection{烧录配置 openocd.cfg}
+
+本工程的 \texttt{openocd.cfg} 内容如下（Windows 下需先装好
+ST-Link 驱动，并把 \texttt{openocd} 加入 PATH）：
+
+\begin{lstlisting}[style=generic]
+# Use ST-Link adapter and STM32F4 target
+source [find interface/stlink.cfg]
+source [find target/stm32f4x.cfg]
+
+adapter speed 240
+stm32f4x.cpu configure -event reset-init { adapter speed 240 }
+stm32f4x.cpu configure -event reset-start { adapter speed 240 }
+\end{lstlisting}
+
+各行的作用：
+
+\begin{itemize}
+  \item \texttt{source [find ...]}：加载 ST-Link 调试器和 STM32F4
+        目标的官方配置。新版用 \texttt{interface/stlink.cfg}，
+        旧名 \texttt{stlink-v2.cfg} 已废弃（会有告警）。
+  \item \texttt{adapter speed 240}：把 SWD 时钟设成 240\,kHz。
+  \item 最后两行\textbf{覆盖} \texttt{stm32f4x.cfg} 自带的
+        \texttt{reset-init} / \texttt{reset-start} 事件处理器。
+        不覆盖的话，OpenOCD 会在复位/烧录时自动把速度顶到
+        2000/8000\,kHz（ST-Link V2 达不到，被迫降档）。
+\end{itemize}
+
+\subsubsection{ST-Link 接线}
+
+\begin{itemize}
+  \item \textbf{SWDIO} $\to$ 芯片 \texttt{PA13}；
+  \item \textbf{SWCLK} $\to$ 芯片 \texttt{PA14}；
+  \item \textbf{GND} $\to$ \texttt{GND}，\textbf{VCC(3V3)} $\to$
+        \texttt{3.3V}（板子已自供电也可不接）；
+  \item \textbf{RESET（NRST）为可选项}：不接时删掉
+        \texttt{reset\_config} 相关行，OpenOCD 走\textbf{软件复位}
+        （向内核寄存器写 \texttt{SYSRESETREQ}），同样能烧录复位。
+        接了 NRST 想更稳才用 \texttt{reset\_config srst\_only}。
+\end{itemize}
+
+\subsubsection{关于 SWD 速度档位}
+
+ST-Link 的 SWD 速度是\textbf{离散档位}（如 240/360/480/1800/4000 kHz），
+不是任意值。请求一个不存在的档位时，OpenOCD 会打印
+\texttt{Unable to match requested speed X, using Y} 并自动降档——
+这只是\textbf{降速提示，不是错误}。直接设成 240（ST-Link 支持的档位）
+就不会出现该提示，也是最稳的低速选择。
+
+\subsection{常用终端命令}
+
+任务的底层就是下面这些命令，在任意终端都能直接敲（Windows 默认用
+PowerShell）：
+
+\begin{lstlisting}[style=bash]
+# 构建（增量，CMake 会自动重新配置）
+cmake --build --preset arm
+
+# 清理 + 配置 + 全量构建
+Remove-Item -Recurse -Force build/arm; cmake --preset arm; cmake --build --preset arm
+
+# 烧录（下载 + 校验 + 复位运行）
+openocd -f openocd.cfg -c "program build/arm/MAKE.hex verify reset exit"
+
+# 构建 + 烧录一次完成
+cmake --build --preset arm; openocd -f openocd.cfg -c "program build/arm/MAKE.hex verify reset exit"
+\end{lstlisting}
+
+若终端是 cmd（非 PowerShell），把 \texttt{Remove-Item -Recurse -Force}
+换成 \texttt{rmdir /s /q}，且路径反斜杠 \texttt{build\textbackslash arm}。
+
+\subsection{在线调试（可选）}
+
+想单步、看变量，可安装扩展 \textbf{Cortex-Debug}（ID
+\texttt{marus25.cortex-debug}），然后新建 \texttt{.vscode/launch.json}：
+
+\begin{lstlisting}[style=generic]
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flash & Debug (OpenOCD)",
+      "type": "cortex-debug",
+      "request": "launch",
+      "servertype": "openocd",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/build/arm/MAKE",
+      "configFiles": ["${workspaceFolder}/openocd.cfg"],
+      "runToEntryPoint": "main"
+    }
+  ]
+}
+\end{lstlisting}
+
+按 \texttt{F5} 即自动启动 OpenOCD、下载固件并停在 \texttt{main()}。
+\textbf{前提是固件带调试符号}：当前 \texttt{CMakeLists.txt} 未加
+\texttt{-g}，产物没有 \texttt{.debug} 段，若要源码级调试，需在
+\texttt{target\_compile\_options} 里补上 \texttt{-g} 再重新构建。
