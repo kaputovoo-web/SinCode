@@ -32,7 +32,7 @@ target_include_directories(stdperiph SYSTEM PUBLIC ${STDP_DIR}/inc)
 target_include_directories(stdperiph PUBLIC Core/inc)   # stm32f4xx_conf.h 在这里
 target_link_libraries(stdperiph PUBLIC cmsis)
 
-# 固件 bin hex
+# 固件 bin
 file(GLOB_RECURSE APP_SRC CONFIGURE_DEPENDS app/*.c)
 
 add_executable(MAKE
@@ -47,14 +47,14 @@ target_link_options(MAKE PRIVATE
     -T${MCU_LDSCRIPT}
     -nostdlib -nostartfiles
     -Wl,--gc-sections
-    -Wl,-Map=$<TARGET_FILE_DIR:MAKE>/MAKE.map
+    -Wl,-Map=$<TARGET_FILE_DIR:MAKE>/app.map
     -Wl,--print-memory-usage
 )
 set_target_properties(MAKE PROPERTIES LINK_DEPENDS ${MCU_LDSCRIPT})
 
 add_custom_command(TARGET MAKE POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:MAKE> $<TARGET_FILE_DIR:MAKE>/MAKE.bin
-    COMMAND ${CMAKE_OBJCOPY} -O ihex   $<TARGET_FILE:MAKE> $<TARGET_FILE_DIR:MAKE>/MAKE.hex
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:MAKE> $<TARGET_FILE_DIR:MAKE>/app.bin
+    COMMAND ${CMAKE_OBJCOPY} -O ihex   $<TARGET_FILE:MAKE> $<TARGET_FILE_DIR:MAKE>/app.hex
     COMMAND ${CMAKE_SIZE} $<TARGET_FILE:MAKE>
     VERBATIM
 )
